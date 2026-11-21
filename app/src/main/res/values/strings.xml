@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">SmartKey Clip</string>
+    <string name="ime_service_label">SmartKey Clip Keyboard</string>
+    <string name="subtype_arabic">Arabic (SmartKey)</string>
+    <string name="subtype_english">English (US - SmartKey)</string>
+    <string name="nav_keyboard">Keyboard</string>
+    <string name="nav_clipboard">Clipboard</string>
+    <string name="nav_telegram">Telegram</string>
+    <string name="nav_security">Audit</string>
+</resources>

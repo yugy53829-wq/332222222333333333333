@@ -1,0 +1,8 @@
+{
+  "name": "Remix SmartKey Clip",
+  "description": "Native Android Arabic \u0026 English smart keyboard (IME) with Room Super Clipboard, Android Keystore AES-GCM security, and optional Telegram Bot sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

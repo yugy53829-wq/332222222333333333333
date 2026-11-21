@@ -1,0 +1,117 @@
+name: Android CI - Build, Test & Publish APK
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Prepare Android SDK licenses
+        run: |
+          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          if [ -n "$SDK_DIR" ]; then
+            mkdir -p "$SDK_DIR/licenses"
+            for hash in "24333f8a63b6825ea9c5514f83c2829b004d1fee" "8933bad161af4178b1185d1a37fbf41ea5269c55" "d56f5187479451eabf01fb78af6dfcb131a6481e"; do
+              grep -qxF "$hash" "$SDK_DIR/licenses/android-sdk-license" 2>/dev/null || printf '\n%s' "$hash" >> "$SDK_DIR/licenses/android-sdk-license"
+            done
+            grep -qxF "84831b9409646a918e30573bab4c9c91346d8abd" "$SDK_DIR/licenses/android-sdk-preview-license" 2>/dev/null || printf '\n84831b9409646a918e30573bab4c9c91346d8abd' >> "$SDK_DIR/licenses/android-sdk-preview-license"
+            SDKMANAGER="$(ls -1 "$SDK_DIR"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n1 || true)"
+            if [ -n "$SDKMANAGER" ] && [ -x "$SDKMANAGER" ]; then
+              yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+            fi
+          fi
+
+      - name: Prepare ephemeral debug signing keystore
+        run: |
+          if [ ! -f debug.keystore ]; then
+            if [ -f debug.keystore.base64 ]; then
+              tr -d '\r\n ' < debug.keystore.base64 | base64 -d > debug.keystore
+            else
+              keytool -genkeypair -keystore debug.keystore \
+                -storepass android -alias androiddebugkey -keypass android \
+                -keyalg RSA -keysize 2048 -validity 10000 \
+                -dname "CN=Android Debug,O=Android,C=US"
+            fi
+          fi
+
+      - name: Setup Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Assemble Debug APK
+        run: gradle :app:assembleDebug --no-daemon --console=plain
+
+      - name: Verify Debug APK & v2 Signature
+        run: |
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
+          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          APKSIGNER="$(ls -1 "$SDK_DIR"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n1 || true)"
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --verbose app/build/outputs/apk/debug/app-debug.apk
+          fi
+          cp app/build/outputs/apk/debug/app-debug.apk SmartKey-Clip-debug.apk
+
+      - name: Upload Debug APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: smartkey-clip-debug-apk
+          path: SmartKey-Clip-debug.apk
+          retention-days: 30
+
+      - name: Run Unit & Robolectric Tests
+        run: gradle :app:testDebugUnitTest --no-daemon --console=plain
+
+      - name: Publish APK to GitHub Releases
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_NOTES="Automated SmartKey Clip build from branch \`${{ github.ref_name }}\` (commit \`${{ github.sha }}\`). Unit & Robolectric tests passed and APK signature verified."
+          set +e
+          if gh release view latest-apk >/dev/null 2>&1; then
+            gh release upload latest-apk SmartKey-Clip-debug.apk --clobber
+            UPLOAD_RC=$?
+            gh release edit latest-apk \
+              --title "SmartKey Clip — Latest APK" \
+              --notes "$RELEASE_NOTES"
+            RC=$((UPLOAD_RC))
+          else
+            gh release create latest-apk SmartKey-Clip-debug.apk \
+              --target "${{ github.sha }}" \
+              --title "SmartKey Clip — Latest APK" \
+              --notes "$RELEASE_NOTES"
+            RC=$?
+          fi
+          set -e
+
+          if [ "$RC" -eq 0 ]; then
+            {
+              echo "### SmartKey Clip APK Ready"
+              echo "- **GitHub Release:** Open **Releases -> SmartKey Clip — Latest APK** to download \`SmartKey-Clip-debug.apk\` directly."
+              echo "- **Workflow Artifact:** Also saved under **Artifacts -> \`smartkey-clip-debug-apk\`** on this run."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Could not publish GitHub Release (check Settings -> Actions -> General -> Workflow permissions -> Read and write permissions). The APK is still available under Actions Artifacts on this workflow run."
+            {
+              echo "### SmartKey Clip APK Built (Artifact Available)"
+              echo "- **Download now:** Scroll down on this workflow run to **Artifacts -> \`smartkey-clip-debug-apk\`**."
+              echo "- **To also enable direct Releases links:** Go to **Settings -> Actions -> General -> Workflow permissions** and select **Read and write permissions**, then re-run this workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
